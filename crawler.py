@@ -1,7 +1,6 @@
 import aiohttp
 import asyncio
 import re
-
 from bs4 import BeautifulSoup
 from enum import Enum
 
@@ -20,6 +19,7 @@ class Crawler:
     _instance = None
     _session = None
     root_url = 'https://www.ptt.cc'
+    main_url = root_url + '/bbs/KR_Entertain/index.html'
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -58,12 +58,23 @@ class Crawler:
         parsed_video_html = soup.find_all(
             'a', href=re.compile(f'.*{source_regex}.*'))
         video_links = [i.get('href') for i in parsed_video_html]
-        print('Process done!')
         return video_links
 
-    async def parse(self):
+    async def get_last_page(self) -> int:
+        print('Get last page...')
+        async with self._session.get(self.main_url) as resp:
+            if resp.status != 200:
+                raise Exception(f'Request failed! status code: {resp.status}')
+            html_body = await resp.text()
+            soup = BeautifulSoup(html_body, "html.parser")
+            last_page_url = soup.find('div', class_='btn-group-paging').find_all('a')[1].get('href')
+            last_page = re.search('\d+', last_page_url).group()
+        return int(last_page) + 1
+
+    async def parse(self, target_page: int):
         print('Parsing target source...')
-        async with self._session.get(self.root_url + '/bbs/KR_Entertain/index.html') as resp:
+        target_url = self.root_url + f'/bbs/KR_Entertain/index{target_page}.html'
+        async with self._session.get(target_url) as resp:
             if resp.status != 200:
                 raise Exception(f'Request failed! status code: {resp.status}')
             html_body = await resp.text()
@@ -80,6 +91,7 @@ class Crawler:
             soup = BeautifulSoup(html_body, "html.parser")
             # make video source regex for extract target link
             video_urls = self.get_video_url(soup)
+            print(f'Successfully parsed article: {article_title}')
             return dict(
                 article_title=article_title,
                 article_url=article_url,
@@ -90,10 +102,18 @@ class Crawler:
         tasks = [asyncio.create_task(self.parse_article(link)) for link in title_links]
         return await asyncio.gather(*tasks)
 
-    async def crawl(self):
+    async def crawl(self, page_range: int = 0):
         self._session = aiohttp.ClientSession()
-        title_links = await asyncio.create_task(self.parse())
-        article_content = await self.parse_articles(title_links)
+        article_content = []
+        # select crawl range that start from last page
+        last_page = await asyncio.create_task(self.get_last_page())
+        target_pages = [page for page in range(
+            last_page, last_page-page_range-1, -1)]
+        print(f'Last page is {str(last_page)}')
+        print(f'Target page to crawl: {str(target_pages)}')
+        for target_page in target_pages:
+            title_links = await asyncio.create_task(self.parse(target_page))
+            article_content.extend(await self.parse_articles(title_links))
         await self._session.close()
 
     def extract_data(self):
