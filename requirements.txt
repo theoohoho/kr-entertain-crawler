@@ -1,2 +1,4 @@
 pydantic
 bs4
+aiohttp
+sqlalchemy
